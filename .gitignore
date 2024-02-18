@@ -8,3 +8,6 @@ env.bak/
 venv.bak/
 .ipynb_checkpoints
 .jupyter
+shootings_database/MappingPoliceViolence
+*.pyc
+.vscode
