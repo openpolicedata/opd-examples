@@ -102,7 +102,10 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
 
     # Load this OPD dataset
     src = opd.Source(row_dataset["SourceName"], state=row_dataset["State"])    # Create source for agency
-    opd_table = src.load(row_dataset['TableType'], row_dataset['Year'])  # Load data
+    try:
+        opd_table = src.load(row_dataset['TableType'], row_dataset['Year'])  # Load data
+    except:
+        raise ValueError(f"{row_dataset['TableType']} dataset for the year {row_dataset['Year']} not available for {row_dataset['SourceName']}, {row_dataset['State']}")
     opd_table.standardize(agg_race_cat=True)  # Standardize data
     opd_table.expand(mismatch='splitsingle')  # Expand cases where the info for multiple people are contained in the same row
     # Some tables contain incident information in 1 table and subject and/or officer information in other tables

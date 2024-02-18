@@ -13,6 +13,7 @@ STREET_NAMES.update(['la','bl','exwy','anue','corridor', 'service rd'])
 STREET_NAMES.remove('fort') 
 STREET_NAMES.remove('center')
 STREET_NAMES.remove('lake')
+STREET_NAMES.remove('camp')
 
 _states = list(states_dict.keys())
 for v in states_dict.values():
@@ -46,17 +47,20 @@ def find_address_col(df_test: pd.DataFrame, error: str='ignore'):
                 continue
             tags = df_test[col].apply(lambda x: tag(x, col, error='ignore'))
         except AttributeError as e:
-            if len(e.args)>0 and e.args[0]=="'bool' object has no attribute 'strip'":
+            if (error=='ignore') or (len(e.args)>0 and e.args[0]=="'bool' object has no attribute 'strip'"):
                 continue
-            elif error=='ignore':
-                raise
             else:
+                raise
+        except ValueError as e:
+            if (error=='ignore') or (str(e)=='Data appears to be an (x,y) location and not an address'):
                 continue
+            else:
+                raise
         except:
             if error=='ignore':
-                raise
-            else:
                 continue
+            else:
+                raise
         tags = tags[tags.apply(lambda x: isinstance(x[1],str) and x[1]!='Null')]
         if tags.apply(lambda x: x[1]).isin(['Street Address','Intersection','Block Address', 'Street Name', 
                                             'StreetDirectional', 'County', 'Building', 'Bridge']).all():
@@ -480,6 +484,8 @@ def tag(address_string: str, col_name: Optional[str]=None, error:str='ignore'):
         return ({}, "Null")
     elif isinstance(address_string, dict):
         if 'human_address' not in address_string.keys():
+            if sorted(address_string.keys())==['x','y']:
+                raise ValueError("Data appears to be an (x,y) location and not an address")
             raise KeyError("Unknown dictionary keys for address")
         address_dict = json.loads(address_string['human_address'])
         result = tag(address_dict['address'], col_name, error)

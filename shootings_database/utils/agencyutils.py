@@ -144,7 +144,7 @@ def filter_agency(agency: str, agency_partial:str, agency_type:str, state:str,
     agencies_comp = df[agency_col].str.lower().str.replace("&", 'and')
     agencies_comp = agencies_comp.str.replace("^"+state_abbrev(state).lower()+" ", full_state_name(state).lower()+" ", regex=True)
     
-    agency_matches = (agencies_comp.str.contains(agency_partial).fillna(False)) & \
+    agency_matches = (agencies_comp.apply(str).str.contains(agency_partial)) & \
         df[state_col].apply(state_equals, args=(state,))
         
     df_agency = df[agency_matches]
