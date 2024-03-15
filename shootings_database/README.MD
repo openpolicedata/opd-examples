@@ -31,4 +31,4 @@ For the Mapping Police Violence database, the database must be downloaded to a l
 For each dataset where unique cases are found, a CSV output file is created for that OPD dataset with all values for each case from the dataset. A set of general information for each case from all OPD datasets will be stored in Potential_MPV_Updates_Global_{Current Date}.csv. All files are datestamped so if the code is run on different days, new files will be generated. If the code is run multiple times, only cases that have not previously been found will be stored. Therefore, it is possible to rerun the code at a future date to get updates, which will be stored in a new datestamped file.
 
 # Help
-Please email us [here](openpolicedata@gmail.com) if you have any questions, issues, or recommendations. We are happy to help get you started working with this code.
+Please email us [here](mailto:openpolicedata@gmail.com) if you have any questions, issues, or recommendations. We are happy to help get you started working with this code.
