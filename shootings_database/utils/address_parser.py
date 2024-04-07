@@ -189,7 +189,7 @@ _p_bridge = re.compile("^"+_bridge_name+_over+_body_of_water+"$", re.IGNORECASE)
 # Prevent street names from being in place name    
 _opt_place = ReText(r"(?<=\s)((?!(?<=\s)("+"|".join(STREET_NAMES)+r")\s)[a-z ])+", 'PlaceName', delims=[r'\s',','])
 _opt_state = ReText([_states], 'StateName')
-_opt_zip = ReText(r'\d{5}+', 'ZipCode', opt=True)
+_opt_zip = ReText(r'\d{5}', 'ZipCode', opt=True)
 _opt_place_line = ReText("("+_opt_place+_opt_state+")",opt=True)+_opt_zip
 
 _p_zip_only = re.compile("^"+_opt_zip.change_opt(False)+"$")
