@@ -66,6 +66,7 @@ logger = ois_matching.get_logger(logging_level)
 
 # Load MPV database and convert to OPD table so that standardization can be applied and some 
 # column names and terms for race and gender can be standardized
+logger.info(f"Loading data from: {csv_filename}")
 mpv_raw = pd.read_csv(csv_filename)
 mpv_table = opd.data.Table({"SourceName":"Mapping Police Violence", 
                       "State":opd.defs.MULTI, 
@@ -103,9 +104,17 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
     # Load this OPD dataset
     src = opd.Source(row_dataset["SourceName"], state=row_dataset["State"])    # Create source for agency
     try:
-        opd_table = src.load(row_dataset['TableType'], row_dataset['Year'])  # Load data
+        # url_contains is typically not needed but is useful when looping over many datasets 
+        # to handle cases where multiple datasets match the TableType and Year
+        opd_table = src.load(row_dataset['TableType'], row_dataset['Year'], url_contains=row_dataset['URL'])  # Load data
     except:
-        raise ValueError(f"{row_dataset['TableType']} dataset for the year {row_dataset['Year']} not available for {row_dataset['SourceName']}, {row_dataset['State']}")
+        if unexpected_conditions=='error':
+            raise ValueError(f"{row_dataset['TableType']} dataset for the year {row_dataset['Year']} not available for {row_dataset['SourceName']}, {row_dataset['State']}")
+        else:
+            # Website where the data exists is likely down
+            print(f"{row_dataset['TableType']} dataset for the year {row_dataset['Year']} not available for {row_dataset['SourceName']}, {row_dataset['State']}. "+
+                  "The website may be temporarily unavailable.")
+            continue
     opd_table.standardize(agg_race_cat=True)  # Standardize data
     opd_table.expand(mismatch='splitsingle')  # Expand cases where the info for multiple people are contained in the same row
     # Some tables contain incident information in 1 table and subject and/or officer information in other tables
@@ -201,9 +210,12 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
             # First find zip code match and then if date is close and demographics match. Remove matches.
             df_opd = ois_matching.remove_matches_agencymismatch(df_mpv, df_mpv_agency, df_opd, mpv_state_col, row_dataset['State'], 
                                                                 'zip', error=unexpected_conditions)
+            
+        df_opd, mpv_matched = ois_matching.remove_name_matches(df_mpv_agency, df_opd, mpv_matched, error=unexpected_conditions)
                 
         # Create a table with columns specific to this agency containing cases that may not already be in MPV
-        df_save, keys = opd_logger.generate_agency_output_data(df_mpv_agency, df_opd, mpv_addr_col, addr_col, mpv_download_date,
+        name_col = opd.defs.columns.NAME_OFFICER_SUBJECT if opd.defs.columns.NAME_OFFICER_SUBJECT in df_opd else opd.defs.columns.NAME_SUBJECT
+        df_save, keys = opd_logger.generate_agency_output_data(df_mpv_agency, df_opd, mpv_addr_col, addr_col, name_col, mpv_download_date,
                                 log_demo_diffs, subject_demo_correction, log_age_diffs, match_with_age_diff, agency, known_fatal)
         
         if len(df_save)>0:
@@ -212,7 +224,7 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
             opd_logger.log(df_save, output_dir, source_basename, keys=keys, add_date=True, only_diffs=True)
 
             # Create a table with general columns applicable to all agencies that may not already be in MPV
-            df_global = opd_logger.generate_general_output_data(df_save, addr_col)
+            df_global = opd_logger.generate_general_output_data(df_save, addr_col, name_col)
 
             # CSV file containing all recommended updates with a limited set of columns
             global_basename = 'Potential_MPV_Updates_Global'

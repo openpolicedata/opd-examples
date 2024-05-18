@@ -1,3 +1,4 @@
+from rapidfuzz import fuzz
 from itertools import product
 import logging
 import math
@@ -28,6 +29,123 @@ gender_vals = opd.defs.get_gender_cats()
 # Only keep specific values for testing later
 [gender_vals.pop(k) for k in ["MULTIPLE","OTHER","OTHER / UNKNOWN", "UNKNOWN", "UNSPECIFIED"] if k in gender_vals]
 gender_vals = gender_vals.values()
+
+
+def remove_name_matches(df_mpv_agency: pd.DataFrame, 
+                        df_opd: pd.DataFrame, 
+                        mpv_matched: pd.Series,
+                        mpv_state_col: str = None,
+                        state: str = None,
+                        df_all: pd.DataFrame = None,
+                        error: str = 'ignore'):
+    """Loop over each row of df_mpv_agency to find cases in df_opd for the same date and matching demographics
+
+    Parameters
+    ----------
+    df_mpv_agency : pd.DataFrame
+        Table of MPV data for agency corresponding to df_opd
+    df_opd : pd.DataFrame
+        OPD table to match with MPV data
+    mpv_matched : pd.Series
+        Series indicating which MPV rows have previously been matched
+    mpv_state_col: str
+        State column in MPV data
+    state: str
+        State for agency corresponding to df_opd
+    df_all: pd.DataFrame
+        Table of MPV data
+    error : str, optional
+        'raise' or 'ignore'. Whether to throw an error if either previously unobserved condition found, by default 'ignore'
+
+    Returns
+    -------
+    Returns updated versions of df_opd, mpv_matched
+    """
+
+    if opd.Column.NAME_SUBJECT in df_opd:
+        col1 = opd.Column.NAME_SUBJECT
+    elif opd.Column.NAME_OFFICER_SUBJECT in df_opd:
+        col1 = opd.Column.NAME_OFFICER_SUBJECT
+    else:
+        return df_opd, mpv_matched
+
+    if opd.Column.NAME_SUBJECT in df_mpv_agency:
+        col2 = opd.Column.NAME_SUBJECT
+    elif opd.Column.NAME_OFFICER_SUBJECT in df_mpv_agency:
+        col2 = opd.Column.NAME_OFFICER_SUBJECT
+    else:
+        return df_opd, mpv_matched
+    
+    if state:
+        # Check for cases where shooting might be listed under another agency or MPV agency might be null
+        mpv_state = agencyutils.filter_state(df_all, mpv_state_col, state)
+        # Remove cases that have already been checked
+        df_mpv_agency = mpv_state.drop(index=df_mpv_agency.index)
+        mpv_matched = pd.Series(False, df_mpv_agency.index)
+
+    thresh = 70
+
+    # def comp_names(x, y):
+    #     if (m:=fuzz.token_sort_ratio(x,y))>thresh:
+    #         return m
+    #     x = " ".split(x.lower())
+    #     y = " ".split(y.lower())
+
+    def clean_name(x):
+        return x.replace("'",'').replace('-',' ').replace(',',' ').replace('.',' ').replace('  ',' ').strip()
+    
+    rcol1 = get_race_col(df_opd)
+    rcol2 = get_race_col(df_mpv_agency)
+
+    acol1 = get_age_col(df_opd)
+    acol2 = get_age_col(df_mpv_agency)
+    
+    keep = pd.Series(True, index=df_opd.index)
+    for idx, name in df_opd[col1].items():
+        cname = clean_name(name)
+        db_names = df_mpv_agency[col2][~mpv_matched]
+        scores = db_names.apply(lambda x: fuzz.token_sort_ratio(cname, clean_name(x)))
+
+        if (exceeds:=scores>=thresh).any():
+            dates = df_mpv_agency.loc[scores[exceeds].index, date_col]
+            year_matches = dates.dt.year == df_opd.loc[idx, date_col].year
+            day_matches = dates.dt.day == df_opd.loc[idx, date_col].day
+
+            if (m:=(year_matches & day_matches & (
+                    (dates.dt.month == df_opd.loc[idx, date_col].month) | 
+                    abs(dates.dt.month - df_opd.loc[idx, date_col].month)==1   # Likely typo in month
+                    )
+                )).any():
+                if m.sum()>1 and error=='error':
+                    raise ValueError(f"Multiple name matches: {cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
+                else:
+                    keep[idx] = False
+                    mpv_matched[m[m].index[0]] = True
+            elif error=='error':
+                raise ValueError(f"Dates ({df_opd.loc[idx, date_col]} vs {dates}) do not match for "+
+                                 f"{cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
+            else:
+                keep[idx] = False
+                mpv_matched[scores[scores==scores.max()].index[0]] = True
+        elif (m1:= df_mpv_agency.loc[~mpv_matched, date_col]==df_opd.loc[idx, date_col]).any() and \
+            (m2:=df_mpv_agency[~mpv_matched][m1][col2].apply(lambda x: any([y in split_words(cname) for y in split_words(x)]))).any():
+            # Same date and part of name is common
+            if m2.sum()>1 and error=='error':
+                raise ValueError(f"Multiple name matches: {cname} vs {df_mpv_agency[~mpv_matched][m1][m2][col2]}")
+            
+            keep[idx] = False
+            mpv_matched[df_mpv_agency[~mpv_matched][m1][m2].index[0]] = True
+        elif (m1 := (abs(df_mpv_agency.loc[~mpv_matched, date_col] - df_opd.loc[idx, date_col]) <= '1d')).any() and \
+            (m2:=df_mpv_agency[~mpv_matched][m1][col2].apply(lambda x: x.lower() in ['name withheld',''])).any() and \
+            rcol1 and acol1 and (m3:=df_opd.loc[idx, rcol1] == df_mpv_agency[~mpv_matched][m1][m2][rcol2]).any():
+            # Name was withheld but date is close and race is the same
+            keep[idx] = False
+            mpv_matched[df_mpv_agency[~mpv_matched][m1][m2][m3].index[0]] = True
+        elif error=='error':
+            dates = df_mpv_agency.loc[~mpv_matched, date_col]
+            assert (abs(dates - df_opd.loc[idx, date_col]) > '1d').all()
+
+    return df_opd[keep], mpv_matched
 
 
 def zipcode_isequal(df1, df2, loc1=None, loc2=None, count=None, iloc1=None, iloc2=None):
