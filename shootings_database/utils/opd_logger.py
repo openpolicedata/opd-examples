@@ -132,7 +132,6 @@ def generate_agency_output_data(df_mpv_agency: pd.DataFrame,
                                 mpv_addr_col: str, 
                                 addr_col: str, 
                                 name_col: str, 
-                                mpv_download_date: datetime,
                                 log_demo_diffs: bool, 
                                 subject_demo_correction: dict, 
                                 log_age_diffs: bool, 
@@ -153,8 +152,6 @@ def generate_agency_output_data(df_mpv_agency: pd.DataFrame,
         Address column in OPD data
     name_col : str
         Name column in OPD data
-    mpv_download_date : datetime
-        Date of download of MPV data
     log_demo_diffs : bool
         Whether or not to log potential race/gender differences between OPD and MPV
     subject_demo_correction : dict
@@ -229,7 +226,6 @@ def generate_agency_output_data(df_mpv_agency: pd.DataFrame,
 
     if len(df_save)>0:
         df_save = pd.concat(df_save, ignore_index=True)
-        df_save['MPV Download Date'] = mpv_download_date
         df_save['Agency'] = agency
         df_save['known_fatal'] = known_fatal
 

@@ -16,8 +16,7 @@ import logging
 
 ############## SETUP PARAMETERS #########################################
 # File locations 
-# CSV file containing MPV data downloaded from https://airtable.com/appzVzSeINK1S3EVR/shroOenW19l1m3w0H/tblxearKzw8W7ViN8
-csv_filename = os.path.join(file_loc, r"MappingPoliceViolence", "Mapping Police Violence_Accessed20240218.csv")
+db_filename = "https://mappingpoliceviolence.us/s/MPVDatasetDownload.xlsx"  # Link on homepage of https://mappingpoliceviolence.us/
 output_dir = os.path.join(file_loc, r"MappingPoliceViolence", "Updates") # Where to output cases found
 
 min_date = None   # Cases will be ignored before this date. If None, min_date will be set to the oldest date in MPV's data
@@ -25,8 +24,9 @@ min_date = None   # Cases will be ignored before this date. If None, min_date wi
 ############## OTHER CONFIGURATION PARAMETERS ###########################
 
 # Names of columns that are not automatically identified
-mpv_addr_col = "street_address"
-mpv_state_col = 'state'
+mpv_addr_col = "Street Address of Incident"
+mpv_state_col = 'State'
+mpv_agency_col = "Agency responsible for death"
 
 # Parameters that affect which cases are logged
 include_unknown_fatal = False  # Whether to include cases where there was a shooting but it is unknown if it was fatal 
@@ -49,31 +49,23 @@ allowed_replacements = {'race':[["HISPANIC/LATINO","INDIGENOUS"],["HISPANIC/LATI
     
 ####################################################################
 
-if not os.path.exists(csv_filename):
-    raise FileExistsError(f"CSV file {csv_filename} does not exist. Please download from https://airtable.com/appzVzSeINK1S3EVR/shroOenW19l1m3w0H/tblxearKzw8W7ViN8.")
-
 if not os.path.exists(output_dir):
     print(f"Creating output directory {output_dir}")
     os.mkdir(output_dir)
-
-try:
-    # Attempt to pull date downloaded out of input file
-    mpv_download_date = datetime.strptime(csv_filename[-4-8:-4], '%Y%m%d')
-except:
-    mpv_download_date = ''
 
 logger = ois_matching.get_logger(logging_level)
 
 # Load MPV database and convert to OPD table so that standardization can be applied and some 
 # column names and terms for race and gender can be standardized
-logger.info(f"Loading data from: {csv_filename}")
-mpv_raw = pd.read_csv(csv_filename)
+logger.info(f"Loading data from: {db_filename}")
+mpv_raw = pd.read_excel(db_filename)
 mpv_table = opd.data.Table({"SourceName":"Mapping Police Violence", 
                       "State":opd.defs.MULTI, 
-                      "TableType":opd.TableType.SHOOTINGS}, 
+                      "TableType":opd.TableType.SHOOTINGS,
+                      'agency_field':mpv_agency_col}, 
                      mpv_raw,
                      opd.defs.MULTI)
-mpv_table.standardize(known_cols={opd.Column.AGENCY:"agency_responsible"})
+mpv_table.standardize()
 df_mpv = mpv_table.table  # Retrieve pandas DataFrame from Table class
 
 # Standard column names for all datasets that have these columns
@@ -215,7 +207,7 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
                 
         # Create a table with columns specific to this agency containing cases that may not already be in MPV
         name_col = opd.defs.columns.NAME_OFFICER_SUBJECT if opd.defs.columns.NAME_OFFICER_SUBJECT in df_opd else opd.defs.columns.NAME_SUBJECT
-        df_save, keys = opd_logger.generate_agency_output_data(df_mpv_agency, df_opd, mpv_addr_col, addr_col, name_col, mpv_download_date,
+        df_save, keys = opd_logger.generate_agency_output_data(df_mpv_agency, df_opd, mpv_addr_col, addr_col, name_col,
                                 log_demo_diffs, subject_demo_correction, log_age_diffs, match_with_age_diff, agency, known_fatal)
         
         if len(df_save)>0:
