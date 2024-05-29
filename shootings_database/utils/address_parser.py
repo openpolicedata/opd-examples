@@ -8,7 +8,8 @@ from openpolicedata.defs import states as states_dict
 from openpolicedata.utils import split_words
 
 STREET_NAMES = usaddress.STREET_NAMES
-STREET_NAMES.update(['la','bl','exwy','anue','corridor', 'service rd'])
+# ac is access road
+STREET_NAMES.update(['la','bl','exwy','anue','corridor', 'service rd','ac'])
 # Not sure that these are ever street names
 STREET_NAMES.remove('fort') 
 STREET_NAMES.remove('center')
@@ -19,13 +20,15 @@ _states = list(states_dict.keys())
 for v in states_dict.values():
     _states.append(v)
 
-def find_address_col(df_test: pd.DataFrame, error: str='ignore'):
+def find_address_col(df_test: pd.DataFrame, location: Optional[str] = None, error: str='ignore'):
     """Find address or street column if it exists
 
     Parameters
     ----------
     df_test : pd.DataFrame
         Table to find column in 
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     error : str, optional
         If 'raise', an exception will be thrown if an unexpected exception is thrown when trying to ID a column
         If 'ignore', no exception will be thrown, the column that was running when the exception occurred will not be ID'ed as an address column 
@@ -36,35 +39,39 @@ def find_address_col(df_test: pd.DataFrame, error: str='ignore'):
     list[str]
         List of address or street columns
     """
-    addr_col = [x for x in df_test.columns if "LOCATION" in x.upper()]
-    for col in addr_col:
-        try:
-            # Check if location is location on the body
-            if df_test[col].apply(lambda x: 
-                                  False if not isinstance(x,str) else
-                                   any([y in x.lower() for y in ['arm','torso','back','chest','hand','leg','abdomen','neck','throat','head']])
-                                   ).mean() > 0.8:
-                continue
-            tags = df_test[col].apply(lambda x: tag(x, col, error='ignore'))
-        except AttributeError as e:
-            if (error=='ignore') or (len(e.args)>0 and e.args[0]=="'bool' object has no attribute 'strip'"):
-                continue
-            else:
-                raise
-        except ValueError as e:
-            if (error=='ignore') or (str(e)=='Data appears to be an (x,y) location and not an address'):
-                continue
-            else:
-                raise
-        except:
-            if error=='ignore':
-                continue
-            else:
-                raise
-        tags = tags[tags.apply(lambda x: isinstance(x[1],str) and x[1]!='Null')]
-        if tags.apply(lambda x: x[1]).isin(['Street Address','Intersection','Block Address', 'Street Name', 
-                                            'StreetDirectional', 'County', 'Building', 'Bridge']).all():
-            return [col]
+    
+    assert error in ['raise', 'ignore']
+
+    for w in ['LOCATION','BLOCK']:
+        addr_col = [x for x in df_test.columns if w in x.upper()]
+        for col in addr_col:
+            try:
+                # Check if location is location on the body
+                if df_test[col].apply(lambda x: 
+                                    False if not isinstance(x,str) else
+                                    any([y in x.lower() for y in ['arm','torso','back','chest','hand','leg','abdomen','neck','throat','head']])
+                                    ).mean() > 0.8:
+                    continue
+                tags = df_test[col].apply(lambda x: tag(x, location, col, error='ignore'))
+            except AttributeError as e:
+                if (error=='ignore') or (len(e.args)>0 and e.args[0]=="'bool' object has no attribute 'strip'"):
+                    continue
+                else:
+                    raise
+            except ValueError as e:
+                if (error=='ignore') or (str(e)=='Data appears to be an (x,y) location and not an address'):
+                    continue
+                else:
+                    raise
+            except:
+                if error=='ignore':
+                    continue
+                else:
+                    raise
+            tags = tags[tags.apply(lambda x: isinstance(x[1],str) and x[1]!='Null')]
+            if tags.apply(lambda x: x[1]).isin(['Street Address','Intersection','Block Address', 'Street Name', 
+                                                'StreetDirectional', 'County', 'Building', 'Bridge', 'Region']).all():
+                return [col]
 
     addr_col = [x for x in df_test.columns if x.upper() in ["STREET"] or x.upper().replace(" ","").startswith("STREETNAME")]
     if len(addr_col):
@@ -203,7 +210,7 @@ _opt_street_dir = ReText([usaddress.DIRECTIONS, r'\.?'], 'StreetNamePreDirection
 _street_name = ReText(r"i?[\w \.\-']+?", "StreetName")  # i- for interstates
 
 _pre_street_names = STREET_NAMES.copy()
-_pre_street_names.update(['ih','route','sr','fm','interstate','spur'])
+_pre_street_names.update(['ih','route','sr','fm','interstate highway','interstate','spur'])
 _pre_street_names.remove("st")
 _pre_street_names.remove("la")
 _pre_street_names.remove("garden")
@@ -293,7 +300,7 @@ occ_delims = _default_delims.copy()
 occ_delims.append(",")
 occ_look = occ_delims.copy()
 occ_look.extend([r"#",r"\d"])
-_opt_occupancy_type = ReText([['APT','apartment']], 'OccupancyType',opt=True,lookahead=occ_look)
+_opt_occupancy_type = ReText([[r'APT\.?',r'apartment']], 'OccupancyType',opt=True,lookahead=occ_look)
 _opt_occupancy_id = ReText(r"#?\s?(?<=(APT\s|.APT|..[\sT]#|T\s#\s))[a-z]?\-?\d+", 'OccupancyIdentifier', opt=True)
 _p_hwy_address = re.compile("^"+_us_hwy+_opt_place_line+"$",re.IGNORECASE)
 _p_address = re.compile("^"+_opt_building_name+_opt_address_num+_opt_building_name.ordinal(2)+_street_match+
@@ -316,7 +323,7 @@ _p_street_plus_ambiguous = re.compile('^'+_street_match+", at"+_address_ambiguou
 _multiple_address = re.compile(r"Location #\d+\s"+_street_match_w_addr, re.IGNORECASE)
 
 _p_county = re.compile("^"+ReText(r"[a-z]+\s*[a-z]*\sCounty", 'PlaceName')+"$", re.IGNORECASE)
-_p_unknown = re.compile("^"+ReText(r"unknown\b.+",'Unknown')+"$", re.IGNORECASE)
+_p_unknown = re.compile("^"+ReText(r"(unknown|not available)\b.*",'Unknown')+"$", re.IGNORECASE)
 
 _latitude = ReText([r"\-?", [str(x) for x in range(0,91)], r'\.\d+'], 'Latitude')
 _longitude = ReText([r"\-?", [str(x) for x in range(0,181)], r'\.\d+'], 'Longitude')
@@ -377,7 +384,8 @@ def _check_result(result, usa_result, col_name=None):
             result[0]['IntersectionSeparator']=='at' or \
             ('StreetNamePreType' in result[0] and result[0]['StreetNamePreType'].title() in _states) or \
             (result[0]['IntersectionSeparator']=='/' and ('IntersectionSeparator' not in usa_result[0] or usa_result[0]['IntersectionSeparator']!='/')) or \
-            (usa_result[1]=='Intersection' and 'SecondStreetName' not in usa_result[0] and 'Recipient' in usa_result[0]):
+            (usa_result[1]=='Intersection' and 'SecondStreetName' not in usa_result[0] and 'Recipient' in usa_result[0]) or \
+            (usa_result[1]=='Intersection' and 'SecondStreetName' in usa_result[0] and len(usa_result[0]['SecondStreetName'])==1):
             # usaddress missed street OR
             # usaddress included separator in street name OR
             # usaddress does not recognize / as separator
@@ -456,13 +464,18 @@ def _check_result(result, usa_result, col_name=None):
         raise NotImplementedError()
 
 
-def tag(address_string: str, col_name: Optional[str]=None, error:str='ignore'):
+def tag(address_string: str,
+        location: Optional[str]=None, 
+        col_name: Optional[str]=None, 
+        error:str='ignore'):
     """Split address into labeled components (address number, street name, etc.)
 
     Parameters
     ----------
     address_string : str
         String containing address
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     col_name : Optional[str], optional
         Optional name of column that contained address_string. Only used if error='raise', by default None
     error : str, optional
@@ -478,6 +491,8 @@ def tag(address_string: str, col_name: Optional[str]=None, error:str='ignore'):
     str
         Type assigned to street address string (Address, Block Address, Intersection, etc.)
     """
+
+    assert location is not None  # This should be removed
     
     assert error in ['raise','ignore']
     if pd.isnull(address_string):
@@ -488,7 +503,7 @@ def tag(address_string: str, col_name: Optional[str]=None, error:str='ignore'):
                 raise ValueError("Data appears to be an (x,y) location and not an address")
             raise KeyError("Unknown dictionary keys for address")
         address_dict = json.loads(address_string['human_address'])
-        result = tag(address_dict['address'], col_name, error)
+        result = tag(address_dict['address'], location, col_name, error)
         if error=='raise' and not all([x in ['address','city','state','zip'] for x in address_dict]):
             raise NotImplementedError()
         for k, kout in zip(['city','state','zip'], ['PlaceName','StateName','ZipCode']):
@@ -499,6 +514,8 @@ def tag(address_string: str, col_name: Optional[str]=None, error:str='ignore'):
     # Ensure that /'s are surrounded by spaces
     address_string = address_string.strip().replace("/"," / ")
     m1=m2=m3=m4=m5=None
+    if location and (m:=_address_search(re.compile(rf'^'+_dir2+ReText(location, 'PlaceName')+r"$", re.IGNORECASE), address_string, error=error)):
+        return _get_address_result(m, "Region", error=error)
     if m1:=_address_search(_p_unknown, address_string, error=error):
         return (m1, 'Null')
     if m1:=_address_search(_p_zip_only, address_string, error=error):

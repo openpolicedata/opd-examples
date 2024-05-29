@@ -6,9 +6,18 @@ import numbers
 import openpolicedata as opd
 import pandas as pd
 import re
-from typing import Literal
+from typing import Literal, Optional
+import warnings
+
 from . import address_parser
 from . import agencyutils
+
+# Suppressing known warnings
+warnings.filterwarnings(action='ignore', category=UserWarning, message='Identified difference in column names when combining sheets')
+warnings.filterwarnings(action='ignore', category=UserWarning, message='Original table is a geopandas DataFrame')
+warnings.filterwarnings(action='ignore', category=UserWarning, message="Column .* in current DataFrame does not match")
+warnings.filterwarnings(action='ignore', category=UserWarning, message='Multiple potential .* columns')
+warnings.filterwarnings(action='ignore', category=FutureWarning)
 
 # Columns will be standardized below to use these names
 date_col = opd.Column.DATE
@@ -19,10 +28,10 @@ injury_cols = [opd.Column.INJURY_SUBJECT, opd.Column.INJURY_OFFICER_SUBJECT]
 zip_col = opd.Column.ZIP_CODE
 
 # Race values will be standardized below to use these values
-race_vals = opd.defs.get_race_cats()
+race_cats = opd.defs.get_race_cats()
 # Only keep specific values for testing later
-[race_vals.pop(k) for k in ["MULTIPLE","OTHER","OTHER / UNKNOWN", "UNKNOWN", "UNSPECIFIED"]]
-race_vals = race_vals.values()
+[race_cats.pop(k) for k in ["MULTIPLE","OTHER","OTHER / UNKNOWN", "UNKNOWN", "UNSPECIFIED"]]
+race_vals = race_cats.values()
 
 # Gender values will be standardized below to use these values
 gender_vals = opd.defs.get_gender_cats()
@@ -87,12 +96,6 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
 
     thresh = 70
 
-    # def comp_names(x, y):
-    #     if (m:=fuzz.token_sort_ratio(x,y))>thresh:
-    #         return m
-    #     x = " ".split(x.lower())
-    #     y = " ".split(y.lower())
-
     def clean_name(x):
         return x.replace("'",'').replace('-',' ').replace(',',' ').replace('.',' ').replace('  ',' ').strip()
     
@@ -105,19 +108,22 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
     keep = pd.Series(True, index=df_opd.index)
     for idx, name in df_opd[col1].items():
         cname = clean_name(name)
+        names_set = set(cname.split(" "))
         db_names = df_mpv_agency[col2][~mpv_matched]
         scores = db_names.apply(lambda x: fuzz.token_sort_ratio(cname, clean_name(x)))
+        num_common = db_names.apply(lambda x: len(names_set.intersection(clean_name(x).split(' '))))
 
-        if (exceeds:=scores>=thresh).any():
+        if (exceeds:=(scores>=thresh) | ((scores>0.6) & (num_common>=2))).any():
             dates = df_mpv_agency.loc[scores[exceeds].index, date_col]
             year_matches = dates.dt.year == df_opd.loc[idx, date_col].year
             day_matches = dates.dt.day == df_opd.loc[idx, date_col].day
 
-            if (m:=(year_matches & day_matches & (
+            m = (dates - df_opd.loc[idx, date_col]).abs() <= '1d'
+            m = m | (year_matches & day_matches & (
                     (dates.dt.month == df_opd.loc[idx, date_col].month) | 
                     abs(dates.dt.month - df_opd.loc[idx, date_col].month)==1   # Likely typo in month
-                    )
-                )).any():
+                    ))
+            if m.any():
                 if m.sum()>1 and error=='raise':
                     raise ValueError(f"Multiple name matches: {cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
                 else:
@@ -127,6 +133,7 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
                 raise ValueError(f"Dates ({df_opd.loc[idx, date_col]} vs {dates}) do not match for "+
                                  f"{cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
             else:
+                # Name match but not a date match. Just mark a match if error!='raise'
                 keep[idx] = False
                 mpv_matched[scores[scores==scores.max()].index[0]] = True
         elif (m1:= df_mpv_agency.loc[~mpv_matched, date_col]==df_opd.loc[idx, date_col]).any() and \
@@ -394,10 +401,12 @@ def _compare_values(orig_val1, orig_val2, idx,
                     col1, col2, rcol1, gcol1, acol1, race_only_val1, race_only_val2,
                     is_unknown, is_match, is_diff_race,
                     allowed_replacements, check_race_only, inexact_age, max_age_diff,
-                    allow_race_diff, delim1=',', delim2=','):
+                    allow_race_diff, delim1=',', delim2=',',
+                    always_replace={race_cats[opd.defs._race_keys.ASIAN]:race_cats[opd.defs._race_keys.AAPI]}
+                    ):
     # When we reach here, orig_val has already been tested to not equal db_val
     orig_val1 = orig_val1.split(delim1) if isinstance(orig_val1, str) and col1==rcol1 else [orig_val1]
-    orig_val2 = orig_val2.split(delim1) if isinstance(orig_val2, str) and col1==rcol1 else [orig_val2]
+    orig_val2 = orig_val2.split(delim2) if isinstance(orig_val2, str) and col1==rcol1 else [orig_val2]
 
     is_age_range1 = col1==acol1 and "RANGE" in col1
     is_age_range2 = col1==acol1 and "RANGE" in col2
@@ -408,7 +417,9 @@ def _compare_values(orig_val1, orig_val2, idx,
     race_diff_found = False
     for val1, val2 in product(orig_val1, orig_val2):
         val1 = val1.strip() if isinstance(val1, str) else val1
+        val1 = always_replace[val1] if val1 in always_replace else val1
         val2 = val2.strip() if isinstance(val2, str) else val2
+        val2 = always_replace[val2] if val2 in always_replace else val2
         if is_age_range1 and is_age_range2:
             raise NotImplementedError()
         elif is_age_range1 or is_age_range2:
@@ -667,7 +678,7 @@ def columns_for_duplicated_check(opd_table, df_matches_raw):
         notin = ["officer", "narrative", "objectid", "incnum", 'text', ' hash', 
                  'firearm','longitude','latitude','rank', 'globalid','rin',
                  'description','force','ofc','sworn','emp','weapon','shots','reason',
-                 'perceived','armed','nature','level']
+                 'perceived','armed','nature','level','number']
         if c not in ignore_cols and c not in keep_cols and \
             ("ID" in [x.upper() for x in split_words(c)] or c.lower().startswith("off") or \
              any([x in c.lower() for x in notin]) or c.lower().startswith('raw_')):
@@ -712,7 +723,10 @@ def address_match(address1, address2, keys1=None, keys2=None, match_null=False):
                         return True
     return False
 
+def street_match(address, col_name, col, notfound='ignore', match_addr_null=False, match_col_null=True, location=None):
     assert notfound in ['raise', 'ignore']
+    addr_tags, addr_type = address_parser.tag(address, location=location, col_name=col_name, error=notfound)
+    
     matches = pd.Series(False, index=col.index, dtype='object')
     if isinstance(addr_tags, list):
         for t in addr_tags:
@@ -727,7 +741,7 @@ def address_match(address1, address2, keys1=None, keys2=None, match_null=False):
     for idx in col.index:
         if not address_match(addr_tags, col[idx], keys1=keys_check1, match_null=match_col_null):
             continue
-        ctags_all, ctype_all = address_parser.tag(col[idx], col.name, error='raise' if notfound=='error' else notfound)
+        ctags_all, ctype_all = address_parser.tag(col[idx], location, col.name, error=notfound)
         if not isinstance(ctags_all, list):
             ctags_all = [ctags_all]
             ctype_all = [ctype_all]
@@ -764,6 +778,7 @@ def remove_matches_date_match_first(df_mpv_agency:pd.DataFrame,
                                     match_with_age_diff: dict, 
                                     args: list[dict],
                                     test_cols: list[str],
+                                    location: Optional[str] = None,
                                     error:str='ignore'):
     """Loop over each row of df_mpv_agency to find cases in df_opd for the same date and matching demographics
 
@@ -788,6 +803,8 @@ def remove_matches_date_match_first(df_mpv_agency:pd.DataFrame,
         See check_for_match for what keyword arguments are available and their defintions
     test_cols : list[str]
         List of columns to use when looking for duplicate rows in df_opd
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     error : str, optional
         'raise' or 'ignore'. Whether to throw an error if either previously unobserved condition found, by default 'ignore'
 
@@ -823,11 +840,11 @@ def remove_matches_date_match_first(df_mpv_agency:pd.DataFrame,
                 if len(drop_duplicates(df_matches[is_match], subset=test_cols_reduced, ignore_null=True, ignore_date_errors=True))==1:
                     # These are the same except for the address. Check if the addresses are similar
                     addr_match = street_match(df_matches[is_match][addr_col].iloc[0], addr_col, 
-                                                        df_matches[is_match][addr_col].iloc[1:], notfound=error)
+                                                        df_matches[is_match][addr_col].iloc[1:], notfound=error, location=location)
                     throw = not addr_match.all()
                 if throw:
                     #Check if address only matches one case
-                    addr_match = street_match(row_mpv[mpv_addr_col], mpv_addr_col, df_matches[is_match][addr_col], notfound=error)
+                    addr_match = street_match(row_mpv[mpv_addr_col], mpv_addr_col, df_matches[is_match][addr_col], location=location, notfound=error)
                     throw = addr_match.sum()!=1
                     if not throw:
                         is_match = addr_match
@@ -838,7 +855,9 @@ def remove_matches_date_match_first(df_mpv_agency:pd.DataFrame,
             if throw:
                 if len(summary_col)>0:
                     throw = not (df_matches[summary_col]==df_matches[summary_col].iloc[0]).all().all()
-            if throw and error=='raise':
+            if throw and error=='raise' and \
+                not (location=='Phoenix' and 'HUNDRED_BLOCK' in df_matches and df_matches['HUNDRED_BLOCK'].str.contains('65XX S 3RD ST').any()):
+                # The exception above is a known duplicate that is hard to ignore due to a repeated row with different addresses
                 raise NotImplementedError("Multiple matches found")
                 
         for idx in df_matches.index:
@@ -862,6 +881,7 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
                                             mpv_addr_col: str, 
                                             addr_col: str, 
                                             mpv_matched: pd.Series, 
+                                            location: Optional[str] = None,
                                             error: str='ignore'):
     """Loop over each row of df_mpv_agency to find cases in df_opd for the same demographics and close or matching date, address, and/or zip code
 
@@ -877,6 +897,8 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
         Address column in OPD data
     mpv_matched : pd.Series
         Series indicating which MPV rows have previously been matched
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     error : str, optional
         'raise' or 'ignore'. Whether to throw an error if either previously unobserved condition found, by default 'ignore'
 
@@ -900,7 +922,7 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
             if len(df_matches)>1:
                 date_close = in_date_range(df_matches[date_col], row_match[date_col], '3d')
                 if addr_col:
-                    addr_match = street_match(row_match[mpv_addr_col], mpv_addr_col, df_matches[addr_col], notfound=error)
+                    addr_match = street_match(row_match[mpv_addr_col], mpv_addr_col, df_matches[addr_col], notfound=error, location=location)
 
                 if date_close.sum()==1 and (not addr_col or addr_match[date_close].iloc[0]):
                     df_opd = df_opd.drop(index=df_matches[date_close].index)
@@ -938,10 +960,12 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
                 else:
                     continue
             else:
+                date_very_close = in_date_range(df_matches[date_col], row_match[date_col], '1d').iloc[0]
                 date_close = in_date_range(df_matches[date_col], row_match[date_col], '3d').iloc[0]
-                addr_match = street_match(row_match[mpv_addr_col], mpv_addr_col, df_matches[addr_col], notfound=error).iloc[0]
+                addr_match = street_match(row_match[mpv_addr_col], mpv_addr_col, df_matches[addr_col], 
+                                          notfound=error, location=location).iloc[0]
                 
-                if date_close and addr_match:
+                if date_very_close or (date_close and addr_match):
                     df_opd = df_opd.drop(index=df_opd[is_match].index)
                     mpv_matched[j] = True
                 elif addr_match and in_date_range(df_matches[date_col], row_match[date_col], '31d', '30d').iloc[0]:
@@ -950,8 +974,7 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
                     mpv_matched[j] = True
                 elif error=='raise' and addr_match:
                     raise NotImplementedError()
-                elif error=='raise' and in_date_range(df_matches[date_col], row_match[date_col], '110d').iloc[0]:
-                    raise NotImplementedError()
+
     return df_opd, mpv_matched
 
 
@@ -961,6 +984,7 @@ def remove_matches_street_match_first(df_mpv_agency: pd.DataFrame,
                                       addr_col: str,
                                       mpv_matched: pd.Series, 
                                       subject_demo_correction: dict, 
+                                      location: Optional[str] = None,
                                       error: str='ignore'):
     """Loop over each row of df_opd to find cases in df_mpv_agency for the same street and close date
 
@@ -978,6 +1002,8 @@ def remove_matches_street_match_first(df_mpv_agency: pd.DataFrame,
         Series indicating which MPV rows have previously been matched
     subject_demo_correction : dict
         Dictionary mapping MPV rows to OPD rows for the same case but which have race and/or gender differences
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     error : str, optional
         'raise' or 'ignore'. Whether to throw an error if either previously unobserved condition found, by default 'ignore'
 
@@ -995,7 +1021,7 @@ def remove_matches_street_match_first(df_mpv_agency: pd.DataFrame,
         
         mpv_unmatched = df_mpv_agency[~mpv_matched]
 
-        matches = street_match(df_opd.iloc[j][addr_col], addr_col, mpv_unmatched[mpv_addr_col], notfound=error)
+        matches = street_match(df_opd.iloc[j][addr_col], addr_col, mpv_unmatched[mpv_addr_col], notfound=error, location=location)
 
         if matches.any():
             date_close = in_date_range(df_opd.iloc[j][date_col], mpv_unmatched[matches][date_col], '3d')
@@ -1056,7 +1082,7 @@ def remove_matches_close_date_match_zipcode(df_mpv_agency: pd.DataFrame,
 
     j = 0
     while j<len(df_opd):
-        if len(df_mpv_agency)==0:
+        if len(df_mpv_agency)==0 and mpv_matched.all():
             break
         
         mpv_unmatched = df_mpv_agency[~mpv_matched]
@@ -1084,6 +1110,8 @@ def remove_matches_close_date_match_zipcode(df_mpv_agency: pd.DataFrame,
                     (mpv_unmatched[date_close][mpv_gender_col]=="MALE").all():
                     j+=1
                     continue
+        else:
+            j+=1        
         if error=='raise':
             raise NotImplementedError()
 
@@ -1098,6 +1126,7 @@ def remove_matches_agencymismatch(df_mpv: pd.DataFrame,
                                   mpv_addr_col: str=None, 
                                   addr_col: str=None, 
                                   allowed_replacements: dict = {'race':[['ASIAN','ASIAN/PACIFIC ISLANDER']]},
+                                  location: Optional[str] = None,
                                   error: str='ignore'):
     """Loop over each row of df_mpv to find cases where the agency does not match but the street or zipcode and demographics match
     and the date is close. 
@@ -1128,6 +1157,8 @@ def remove_matches_agencymismatch(df_mpv: pd.DataFrame,
         allowed_replacements={'race',[["HISPANIC/LATINO","INDIGENOUS"],['ASIAN','ASIAN/PACIFIC ISLANDER']]}, 
         then, if the race of row_match was 'INDIGENOUS' and of a row of df was 'HISPANIC/LATINO', that would be
         considered a match (same with 'ASIAN' and 'ASIAN/PACIFIC ISLANDER'), by default {}
+    location : Optional[str], optional
+        Optional name of location (if known). Currently used on a very limited based to aid tagging, by default None
     error : str, optional
         'raise' or 'ignore'. Whether to throw an error if either previously unobserved condition found, by default 'ignore'
 
@@ -1153,7 +1184,8 @@ def remove_matches_agencymismatch(df_mpv: pd.DataFrame,
             addr_match = zipcode_isequal(df_opd, mpv_state, iloc1=j)
         else:
             addr_match = street_match(df_opd.iloc[j][addr_col], addr_col, mpv_state[mpv_addr_col], 
-                                                    notfound=error, match_col_null=False)
+                                                    notfound=error, match_col_null=False,
+                                                    location=location)
         if addr_match.any() and \
             in_date_range(df_opd.iloc[j][date_col], mpv_state[addr_match][date_col], '30d').any():
             if (m:=in_date_range(df_opd.iloc[j][date_col], mpv_state[addr_match][date_col], '1d')).any():

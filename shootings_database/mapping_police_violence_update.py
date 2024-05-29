@@ -43,8 +43,7 @@ unexpected_conditions = 'raise'   # 'raise' or 'ignore'. If 'raise', an error wi
 # If a perfect demographics match is not found, an attempt can be made to allow differences in race and gender values
 # when trying to find a case with matching demographics. The below cases have been identified  as differing in some cases.
 # The pairs below will be considered equivalent when allowed_replacements is used
-allowed_replacements = {'race':[["HISPANIC/LATINO","INDIGENOUS"],["HISPANIC/LATINO","WHITE"],["HISPANIC/LATINO","BLACK"],
-                                ['ASIAN','ASIAN/PACIFIC ISLANDER']],
+allowed_replacements = {'race':[["HISPANIC/LATINO","INDIGENOUS"],["HISPANIC/LATINO","WHITE"],["HISPANIC/LATINO","BLACK"]],
                         'gender':[['TRANSGENDER','MALE'],['TRANSGENDER','FEMALE']]}
     
 ####################################################################
@@ -140,7 +139,7 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
         continue  # No data. Move to the next dataset
 
     # Find address or street column if it exists
-    addr_col = address_parser.find_address_col(df_opd_all, error=unexpected_conditions)
+    addr_col = address_parser.find_address_col(df_opd_all, error=unexpected_conditions, location=row_dataset["SourceName"])
     addr_col = addr_col[0] if len(addr_col)>0 else None
 
     # If dataset has multiple agencies, loop over them individually
@@ -176,22 +175,24 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
             df_opd, mpv_matched, subject_demo_correction, match_with_age_diff = ois_matching.remove_matches_date_match_first(
                 df_mpv_agency, df_opd, mpv_addr_col, addr_col, 
                 mpv_matched, subject_demo_correction, match_with_age_diff, a, 
-                test_cols, error=unexpected_conditions)
+                test_cols, error=unexpected_conditions, location=agency_partial)
         
         # First find cases that have the same demographics and then check if date is close and street matches (if there is an address column).
         #  Remove matches.
         df_opd, mpv_matched = ois_matching.remove_matches_demographics_match_first(df_mpv_agency, df_opd, 
                                                                                    mpv_addr_col, addr_col, mpv_matched,
+                                                                                   location=agency_partial,
                                                                                    error=unexpected_conditions)
 
         if addr_col:
             # First find cases that have the same street and then check if date is close.  Remove matches.
             df_opd, mpv_matched, subject_demo_correction = ois_matching.remove_matches_street_match_first(df_mpv_agency, df_opd, mpv_addr_col, addr_col,
-                                      mpv_matched, subject_demo_correction, error=unexpected_conditions)
+                                      mpv_matched, subject_demo_correction, location=agency_partial, error=unexpected_conditions)
             # Sometimes, MPV has an empty or different agency so check other agencies.
             # First find street match and then if date is close and demographics match. Remove matches.
             df_opd = ois_matching.remove_matches_agencymismatch(df_mpv, df_mpv_agency, df_opd, mpv_state_col, row_dataset['State'], 
                                                                 'address', mpv_addr_col, addr_col,
+                                                                location=agency_partial,
                                                                 error=unexpected_conditions)
         else:
             # Remove cases where the zip code matches and the date is close
