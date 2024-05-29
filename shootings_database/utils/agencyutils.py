@@ -43,7 +43,7 @@ def state_abbrev(s):
         return s
 
 _p_dept = re.compile('^department of .+', re.IGNORECASE)
-def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore'):
+def split(agency: str, state:str, unknown_type:Literal["ignore",'raise']='ignore'):
     """Split full agency name into location name and type (Such as "New York" and "Police Department" for "New York Police Department")
 
     Parameters
@@ -55,7 +55,7 @@ def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore
     unknown_type : str, optional
         How to handle cases where agency type cannot be determined:
             'ignore': Return full agency name as the partial name and an empty string for the type
-            'error': Thrown and error,
+            'raise': Throw an error,
             by default 'ignore'
 
     Returns
@@ -64,7 +64,7 @@ def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore
         _description_
     """
     unknown_type = unknown_type.lower()
-    assert(unknown_type in ['ignore','error'])
+    assert unknown_type in ['ignore','raise']
     types_in_agency = [x for x in agency_types if agency.lower().endswith(x.lower())]
     if len(types_in_agency)==0:
         if _p_dept.search(agency):
@@ -72,7 +72,7 @@ def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore
         elif agency.lower().startswith(full_state_name(state).lower()+" "):
             types_in_agency = [x for x in agency_types if x.lower() in agency.lower()]
             if len(types_in_agency)==0:
-                if unknown_type=='error':
+                if unknown_type=='raise':
                     raise ValueError(f"Unable to find agency type in {agency}")
                 else:
                     return agency, ""
@@ -82,7 +82,7 @@ def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore
         elif agency.lower().startswith(state_abbrev(state).lower()+" "):
             types_in_agency = [x for x in agency_types if x.lower() in agency.lower()]
             if len(types_in_agency)==0:
-                if unknown_type=='error':
+                if unknown_type=='raise':
                     raise ValueError(f"Unable to find agency type in {agency}")
                 else:
                     return agency, ""
@@ -90,7 +90,7 @@ def split(agency: str, state:str, unknown_type:Literal["ignore",'error']='ignore
             idx = agency.lower().find(types_in_agency[0].lower())
             agency = agency[:idx+len(types_in_agency[0])]
             types_in_agency = ['']
-        elif unknown_type=='error':
+        elif unknown_type=='raise':
             raise ValueError(f"Unable to find agency type in {agency}")
         else:
             return agency, ""
@@ -136,6 +136,8 @@ def filter_agency(agency: str, agency_partial:str, agency_type:str, state:str,
     pd.DataFrame
         Filtered table
     """
+
+    assert error in ['raise','ignore']
 
     agency = agency.lower().strip().replace("&", 'and')
     agency_partial = agency_partial.lower().strip().replace("&", 'and')

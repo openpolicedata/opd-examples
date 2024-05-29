@@ -62,6 +62,8 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
     Returns updated versions of df_opd, mpv_matched
     """
 
+    assert error in ['raise','ignore']
+
     if opd.Column.NAME_SUBJECT in df_opd:
         col1 = opd.Column.NAME_SUBJECT
     elif opd.Column.NAME_OFFICER_SUBJECT in df_opd:
@@ -116,12 +118,12 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
                     abs(dates.dt.month - df_opd.loc[idx, date_col].month)==1   # Likely typo in month
                     )
                 )).any():
-                if m.sum()>1 and error=='error':
+                if m.sum()>1 and error=='raise':
                     raise ValueError(f"Multiple name matches: {cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
                 else:
                     keep[idx] = False
                     mpv_matched[m[m].index[0]] = True
-            elif error=='error':
+            elif error=='raise':
                 raise ValueError(f"Dates ({df_opd.loc[idx, date_col]} vs {dates}) do not match for "+
                                  f"{cname} vs {df_mpv_agency.loc[scores[exceeds].index, col2]}")
             else:
@@ -130,7 +132,7 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
         elif (m1:= df_mpv_agency.loc[~mpv_matched, date_col]==df_opd.loc[idx, date_col]).any() and \
             (m2:=df_mpv_agency[~mpv_matched][m1][col2].apply(lambda x: any([y in split_words(cname) for y in split_words(x)]))).any():
             # Same date and part of name is common
-            if m2.sum()>1 and error=='error':
+            if m2.sum()>1 and error=='raise':
                 raise ValueError(f"Multiple name matches: {cname} vs {df_mpv_agency[~mpv_matched][m1][m2][col2]}")
             
             keep[idx] = False
@@ -141,7 +143,7 @@ def remove_name_matches(df_mpv_agency: pd.DataFrame,
             # Name was withheld but date is close and race is the same
             keep[idx] = False
             mpv_matched[df_mpv_agency[~mpv_matched][m1][m2][m3].index[0]] = True
-        elif error=='error':
+        elif error=='raise':
             dates = df_mpv_agency.loc[~mpv_matched, date_col]
             assert (abs(dates - df_opd.loc[idx, date_col]) > '1d').all()
 
@@ -710,9 +712,7 @@ def address_match(address1, address2, keys1=None, keys2=None, match_null=False):
                         return True
     return False
 
-def street_match(address, col_name, col, notfound='ignore', match_addr_null=False, match_col_null=True):
-    addr_tags, addr_type = address_parser.tag(address, col_name, error='raise' if notfound=='error' else notfound)
-
+    assert notfound in ['raise', 'ignore']
     matches = pd.Series(False, index=col.index, dtype='object')
     if isinstance(addr_tags, list):
         for t in addr_tags:
@@ -720,7 +720,7 @@ def street_match(address, col_name, col, notfound='ignore', match_addr_null=Fals
         return matches
     keys_check1 = [x for x in addr_tags.keys() if x.endswith('StreetName')]
     if len(keys_check1)==0:
-        if notfound=='error' and addr_type not in ['Coordinates','PlusCode','County']:
+        if notfound=='raise' and addr_type not in ['Coordinates','PlusCode','County','Region']:
             raise ValueError(f"'StreetName' not found in {address}")
         else:
             return pd.Series(match_addr_null, index=col.index, dtype='object')
@@ -737,7 +737,7 @@ def street_match(address, col_name, col, notfound='ignore', match_addr_null=Fals
                 if match_col_null:
                     matches[idx] = True
                 continue
-            if notfound=='error' and len(keys_check2)==0:
+            if notfound=='raise' and len(keys_check2)==0:
                 raise ValueError(f"'StreetName' not found in {col[idx]}")
 
             matches[idx] = address_match(addr_tags, ctags, keys1=keys_check1, keys2=keys_check2, match_null=match_col_null)
@@ -795,6 +795,9 @@ def remove_matches_date_match_first(df_mpv_agency:pd.DataFrame,
     -------
     Returns updated versions of df_opd, mpv_matched, subject_demo_correction, match_with_age_diff
     """
+
+    assert error in ['raise','ignore']
+
     logger = logging.getLogger("ois")
     for j, row_mpv in df_mpv_agency.iterrows():
         df_matches = find_date_matches(df_opd, date_col, row_mpv[date_col])
@@ -881,6 +884,8 @@ def remove_matches_demographics_match_first(df_mpv_agency: pd.DataFrame,
     -------
     Returns updated versions of df_opd, mpv_matched
     """
+
+    assert error in ['raise', 'ignore']
     
     for j, row_match in df_mpv_agency.iterrows():
         if len(df_opd)==0:
@@ -980,6 +985,8 @@ def remove_matches_street_match_first(df_mpv_agency: pd.DataFrame,
     -------
     Returns updated versions of df_opd, mpv_matched, subject_demo_correction
     """
+
+    assert error in ['raise','ignore']
     
     j = 0
     while j<len(df_opd):
@@ -1041,6 +1048,8 @@ def remove_matches_close_date_match_zipcode(df_mpv_agency: pd.DataFrame,
     -------
     Returns updated versions of df_opd, mpv_matched, match_with_age_diff
     """
+
+    assert error in ['raise', 'ignore']
 
     test_gender_col = get_gender_col(df_opd)
     mpv_gender_col = get_gender_col(df_mpv_agency)
@@ -1126,6 +1135,8 @@ def remove_matches_agencymismatch(df_mpv: pd.DataFrame,
     -------
     Returns updated versions of df_opd, mpv_matched, subject_demo_correction
     """
+
+    assert error in ['raise', 'ignore']
 
     match_type = match_type.lower()
     assert match_type in ['address','zip']

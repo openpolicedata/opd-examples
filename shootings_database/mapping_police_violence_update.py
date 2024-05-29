@@ -37,7 +37,7 @@ keep_self_inflicted = False   # Whether to keep cases that are marked self-infli
 # Logging and restarting parameters
 istart = 1  # 1-based index (same as log statements) to start at in OPD datasets. Can be useful for restarting. Set to 1 to start from beginning.
 logging_level = logging.INFO  # Logging level. Change to DEBUG for some additional messaging.
-unexpected_conditions = 'ignore'   # If 'error', an error will be thrown when a condition occurs that was not previously identified in testing.
+unexpected_conditions = 'raise'   # 'raise' or 'ignore'. If 'raise', an error will be thrown when a condition occurs that was not previously identified in testing.
 
 # There are sometimes demographic differences between MPV and other datasets for the same case
 # If a perfect demographics match is not found, an attempt can be made to allow differences in race and gender values
@@ -100,7 +100,7 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
         # to handle cases where multiple datasets match the TableType and Year
         opd_table = src.load(row_dataset['TableType'], row_dataset['Year'], url_contains=row_dataset['URL'])  # Load data
     except:
-        if unexpected_conditions=='error':
+        if unexpected_conditions=='raise':
             raise ValueError(f"{row_dataset['TableType']} dataset for the year {row_dataset['Year']} not available for {row_dataset['SourceName']}, {row_dataset['State']}")
         else:
             # Website where the data exists is likely down
