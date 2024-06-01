@@ -3,11 +3,20 @@ import os, sys
 from datetime import datetime
 file_loc = sys.path[0]
 sys.path.append(os.path.dirname(file_loc))  # Add current file directory to path
+
+try:
+    import openpolicedata as opd
+except:
+    # Dev mode
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(file_loc)),'openpolicedata'))
+    import openpolicedata as opd
+    opd_csv_file = r"..\opd-data\opd_source_table.csv"
+    opd.datasets.reload(opd_csv_file)
+
 from shootings_database.utils import address_parser
 from shootings_database.utils  import agencyutils
 from shootings_database.utils  import ois_matching
 from shootings_database.utils  import opd_logger
-import openpolicedata as opd
 import logging
 
 # Script for identifying police killing in OpenPoliceData (OPD) data not in MPV database.
@@ -89,6 +98,8 @@ for t in tables_to_use:
 opd_datasets = pd.concat(opd_datasets, ignore_index=True)
 logger.info(f"{len(opd_datasets)} officer-involved shootings or use of force datasets found in OPD")
 
+total_fatal_opd = 0
+
 for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop over OPD OIS datasets
     logger.info(f'Running {k+1} of {len(opd_datasets)}: {row_dataset["SourceName"]} {row_dataset["TableType"]} {row_dataset["Year"] if row_dataset["Year"]!="MULTIPLE" else ""}')
 
@@ -134,6 +145,9 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
 
     df_opd_all, known_fatal, test_cols = ois_matching.clean_data(opd_table, df_opd_all, row_dataset['TableType'], min_date, 
                                                   include_unknown_fatal, keep_self_inflicted)
+    
+    total_fatal_opd += len(df_opd_all)
+    print(total_fatal_opd)
 
     if len(df_opd_all)==0:
         continue  # No data. Move to the next dataset
@@ -159,6 +173,7 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
         # Match OPD cases to MPV cases starting with strictest match requirements and then
         # with progressively more relaxed requirements. There are frequent differences between
         # the datasets in OPD and MPV that need to be dealt with. 
+        matcher = ois_matching.OIS_Matcher(df_mpv_agency, mpv_addr_col, addr_col, mpv_state_col, agency_partial, error=unexpected_conditions)
 
         # args first requires a perfect demographics match then loosen demographics matching requirements
         # See ois_matching.check_for_match for definitions of the different methods for loosening 
@@ -172,39 +187,31 @@ for k, row_dataset in opd_datasets.iloc[max(1,istart)-1:].iterrows():  # Loop ov
         mpv_matched = pd.Series(False, df_mpv_agency.index)
         for a in args:
             # First find cases that have the same date and then check demographics and possibly zip code. Remove matches.
-            df_opd, mpv_matched, subject_demo_correction, match_with_age_diff = ois_matching.remove_matches_date_match_first(
-                df_mpv_agency, df_opd, mpv_addr_col, addr_col, 
-                mpv_matched, subject_demo_correction, match_with_age_diff, a, 
-                test_cols, error=unexpected_conditions, location=agency_partial)
+            df_opd, mpv_matched, subject_demo_correction, match_with_age_diff = matcher.remove_matches_date_match_first(
+                df_opd, mpv_matched, subject_demo_correction, match_with_age_diff, a, 
+                test_cols)
         
         # First find cases that have the same demographics and then check if date is close and street matches (if there is an address column).
         #  Remove matches.
-        df_opd, mpv_matched = ois_matching.remove_matches_demographics_match_first(df_mpv_agency, df_opd, 
-                                                                                   mpv_addr_col, addr_col, mpv_matched,
-                                                                                   location=agency_partial,
-                                                                                   error=unexpected_conditions)
+        df_opd, mpv_matched = matcher.remove_matches_demographics_match_first(df_opd, mpv_matched)
 
         if addr_col:
             # First find cases that have the same street and then check if date is close.  Remove matches.
-            df_opd, mpv_matched, subject_demo_correction = ois_matching.remove_matches_street_match_first(df_mpv_agency, df_opd, mpv_addr_col, addr_col,
-                                      mpv_matched, subject_demo_correction, location=agency_partial, error=unexpected_conditions)
+            df_opd, mpv_matched, subject_demo_correction = matcher.remove_matches_street_match_first(df_opd, mpv_matched, 
+                                                                                                     subject_demo_correction)
             # Sometimes, MPV has an empty or different agency so check other agencies.
             # First find street match and then if date is close and demographics match. Remove matches.
-            df_opd = ois_matching.remove_matches_agencymismatch(df_mpv, df_mpv_agency, df_opd, mpv_state_col, row_dataset['State'], 
-                                                                'address', mpv_addr_col, addr_col,
-                                                                location=agency_partial,
-                                                                error=unexpected_conditions)
+            df_opd = matcher.remove_matches_agencymismatch(df_mpv, df_opd, row_dataset['State'], 'address')
         else:
             # Remove cases where the zip code matches and the date is close
-            df_opd, mpv_matched, match_with_age_diff = ois_matching.remove_matches_close_date_match_zipcode(
-                    df_mpv_agency, df_opd, mpv_matched, match_with_age_diff, 
-                    allowed_replacements=allowed_replacements, error=unexpected_conditions)
+            df_opd, mpv_matched, match_with_age_diff = matcher.remove_matches_close_date_match_zipcode(
+                    df_opd, mpv_matched, match_with_age_diff, 
+                    allowed_replacements=allowed_replacements)
             # Sometimes, MPV has an empty or different agency so check other agencies.
             # First find zip code match and then if date is close and demographics match. Remove matches.
-            df_opd = ois_matching.remove_matches_agencymismatch(df_mpv, df_mpv_agency, df_opd, mpv_state_col, row_dataset['State'], 
-                                                                'zip', error=unexpected_conditions)
+            df_opd = matcher.remove_matches_agencymismatch(df_mpv, df_opd, row_dataset['State'], 'zip')
             
-        df_opd, mpv_matched = ois_matching.remove_name_matches(df_mpv_agency, df_opd, mpv_matched, error=unexpected_conditions)
+        df_opd, mpv_matched = matcher.remove_name_matches(df_opd, mpv_matched)
                 
         # Create a table with columns specific to this agency containing cases that may not already be in MPV
         name_col = opd.defs.columns.NAME_OFFICER_SUBJECT if opd.defs.columns.NAME_OFFICER_SUBJECT in df_opd else opd.defs.columns.NAME_SUBJECT
