@@ -1,4 +1,0 @@
-openpolicedata[optional]>=0.7.1
-pandas
-usaddress
-rapidfuzz
