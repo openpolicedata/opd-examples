@@ -137,6 +137,8 @@ def stopped_data_by_table_type_plots(tabletype_counts, stopped_datasets, title_p
     plt.xlabel('Table Type')
     plt.ylabel('Percentage of Stopped Datasets')
     plt.title(title_prepend+'Percentage of Stopped Datasets by Table Type')
+    for k in range(len(tabletype_counts)):
+        plt.text(k - 0.1, percentage_of_stopped_datasets.iloc[k] + 0.3, str(stopped_tabletype_counts.loc[percentage_of_stopped_datasets.index[k]]))
     plt.show()
 
 
